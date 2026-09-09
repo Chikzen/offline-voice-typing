@@ -1,0 +1,18 @@
+# СЕКРЕТЫ — никогда не коммитить
+api_key.txt
+*.key
+.env
+
+# Окружение и кэш
+venv/
+__pycache__/
+*.pyc
+
+# Рабочие файлы и записи голоса
+gemini_dictate.log
+last_phrase.wav
+phrases/
+_*.py
+_*.txt
+_*.json
+_*.log
