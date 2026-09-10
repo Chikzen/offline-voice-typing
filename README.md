@@ -6,8 +6,13 @@ field has focus: browser, Word, Excel, Telegram, your CRM.
 
 Speech-to-text · dictation · voice input · Ukrainian · українська мова
 
+![Ukrainian voice typing in action](docs/demo.gif)
+
 **Double-tap Ctrl. Talk. The text appears.** That is the whole interaction —
 no window to open, no button to click, no app to switch to.
+
+*Unedited recording: Ukrainian speech, a Latin brand name and a number, then a
+switch of language mid-session — all detected automatically.*
 
 Built because Windows' own voice typing (`Win+H`) **does not support
 Ukrainian**. Russian, Polish and Bulgarian are there. Ukrainian is not, and

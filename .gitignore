@@ -16,3 +16,6 @@ _*.py
 _*.txt
 _*.json
 _*.log
+_*.cmd
+_*.flag
+_*.mp4
