@@ -6,12 +6,41 @@ field has focus: browser, Word, Excel, Telegram, your CRM.
 
 Speech-to-text · dictation · voice input · Ukrainian · українська мова
 
+**Double-tap Ctrl. Talk. The text appears.** That is the whole interaction —
+no window to open, no button to click, no app to switch to.
+
 Built because Windows' own voice typing (`Win+H`) **does not support
 Ukrainian**. Russian, Polish and Bulgarian are there. Ukrainian is not, and
 [the request to add it](https://learn.microsoft.com/en-us/answers/questions/5913553/add-ukrainian-language-support-for-windows-voice-t)
 has no answer from Microsoft.
 
-Roughly 300 lines of Python, no installer, no telemetry, no account.
+Roughly 300 lines of Python, no installer, no telemetry, no account. You bring
+your own API key, so you pay cents for what you actually dictate instead of a
+monthly subscription — about **$0.04 per hour** of continuous speech.
+
+---
+
+## Your language isn't Ukrainian? It still works.
+
+Nothing here is Ukrainian-specific. The recognition model handles **~99
+languages**; Windows voice typing covers about 36. If yours is in the gap,
+this fills it — change one line in `settings.txt`:
+
+```
+ALLOWED_LANGS=el,en          # Greek, for example
+FALLBACK_LANG=el
+```
+
+Languages Windows voice typing does **not** support, which work here:
+
+**Ukrainian** · Greek · Hebrew · Arabic · Persian · Serbian · Bosnian ·
+Macedonian · Belarusian · Georgian · Armenian · Azerbaijani · Kazakh ·
+Indonesian · Malay · Bengali · Urdu · Catalan · Icelandic · Swahili · and more
+
+Leave `LANGUAGE` empty and the language is detected per phrase, so you can
+switch mid-sentence — dictate Ukrainian, drop in an English brand name,
+answer a colleague in German. `ALLOWED_LANGS` is just a guard that catches
+misdetection into a language you never speak.
 
 ---
 
