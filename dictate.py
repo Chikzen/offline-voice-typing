@@ -1,13 +1,13 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
-MovaType - live voice typing for Windows (Ukrainian, Russian, English, German).
+Ukrainian Voice Typing for Windows - live dictation in uk / ru / en / de.
 
 Double-tap Ctrl (or Num Lock / Scroll Lock / Pause) toggles dictation ON/OFF.
 While ON the script listens continuously, cuts speech into phrases at natural
 pauses, transcribes each one and pastes it into whatever field has focus - so
 text appears while you keep talking. A small always-on-top badge shows state.
 
-https://github.com/Evronot/movatype
+https://github.com/alex80674097219/ukrainian-voice-typing
 """
 
 import base64
@@ -34,7 +34,7 @@ import pyperclip
 import tkinter as tk
 
 BASE_DIR = Path(__file__).resolve().parent
-LOG_FILE = BASE_DIR / "movatype.log"
+LOG_FILE = BASE_DIR / "dictate.log"
 KEY_FILE = BASE_DIR / "api_key.txt"
 SETTINGS_FILE = BASE_DIR / "settings.txt"
 LAST_WAV = BASE_DIR / "last_phrase.wav"
@@ -284,7 +284,7 @@ def _headers():
         raise RuntimeError("no OpenRouter API key")
     return {"Authorization": "Bearer " + api_key,
             "Content-Type": "application/json",
-            "X-Title": "MovaType"}
+            "X-Title": "Ukrainian Voice Typing"}
 
 
 def _post(url, payload):
@@ -744,7 +744,7 @@ def main():
     except Exception:
         pass
     log("=" * 50)
-    log("MovaType starting, engine=%s model=%s lang=%s"
+    log("Dictation starting, engine=%s model=%s lang=%s"
         % (ENGINE, STT_MODEL if ENGINE != "chat" else CHAT_MODEL,
            LANGUAGE or "auto"))
     if not get_api_key():
@@ -790,7 +790,7 @@ def main():
 
     _ui = Badge()
     log("ready")
-    ui("off", "MovaType: %s" % registered[0])
+    ui("off", "Диктування: %s" % registered[0])
     threading.Timer(3.0, lambda: _ui and _ui.hide()).start()
     _ui.run()
 

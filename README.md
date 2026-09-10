@@ -1,10 +1,10 @@
-# MovaType
+﻿# Ukrainian Voice Typing for Windows
 
-**Voice typing for Windows that speaks Ukrainian.** Plus Russian, English and
-German. Hit a key, talk, and the text lands in whatever field has focus —
-browser, Word, Excel, Telegram, your CRM.
+**Global voice typing for Windows with Ukrainian speech recognition** — plus
+Russian, English and German. Press a key, talk, and the text lands in whatever
+field has focus: browser, Word, Excel, Telegram, your CRM.
 
-*Mova* (мова) is Ukrainian for language.
+Speech-to-text · dictation · voice input · Ukrainian · українська мова
 
 Built because Windows' own voice typing (`Win+H`) **does not support
 Ukrainian**. Russian, Polish and Bulgarian are there. Ukrainian is not, and
@@ -47,8 +47,8 @@ error. A small badge in the corner shows the current state.
 Requires Python 3.10+.
 
 ```
-git clone https://github.com/Evronot/movatype
-cd movatype
+git clone https://github.com/alex80674097219/ukrainian-voice-typing
+cd ukrainian-voice-typing
 python -m venv venv
 venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
@@ -64,7 +64,7 @@ and paste your key into `api_key.txt` (it is in `.gitignore`).
 Run it:
 
 ```
-venv\Scripts\pythonw.exe movatype.py
+venv\Scripts\pythonw.exe dictate.py
 ```
 
 To start it with Windows, put a shortcut to that command in `shell:startup`.

@@ -1,4 +1,4 @@
-# СЕКРЕТЫ — никогда не коммитить
+﻿# СЕКРЕТЫ — никогда не коммитить
 api_key.txt
 *.key
 .env
@@ -9,7 +9,7 @@ __pycache__/
 *.pyc
 
 # Рабочие файлы и записи голоса
-movatype.log
+dictate.log
 last_phrase.wav
 phrases/
 _*.py
