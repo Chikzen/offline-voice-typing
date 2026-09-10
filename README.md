@@ -117,6 +117,17 @@ Everything lives in `settings.txt`. Restart after editing.
 | `PROVIDER_ORDER`, `HEDGE_AFTER` | Latency control |
 | `MAX_PARALLEL` | Concurrent recognition requests |
 
+`replacements.txt` is a plain word list applied to the recognised text
+locally — no extra request, no added latency. Recognition models are
+unstable on proper nouns: the same brand comes back in Latin one day and
+transliterated into Cyrillic the next. One line per term fixes it:
+
+```
+віктрон = Victron
+пайлонтех = Pylontech
+мппт = MPPT
+```
+
 ## What this cost me to learn
 
 Measurements below are from real dictation on one setup — a USB desktop mic,
@@ -159,6 +170,23 @@ Slavic languages get misdetected, and that phrase is simply redone.
 
 Short German words inside a Ukrainian sentence still defeat auto-detection —
 hence the manual language key.
+
+### Reusing one HTTPS connection cut latency by more than half
+
+Every phrase is a separate HTTPS request. Creating a new connection each
+time means a DNS lookup, a TCP handshake and a TLS handshake before a
+single byte of audio moves. Measured on 6 real phrases, same model, same
+provider:
+
+| | Median round trip |
+|---|---|
+| New connection per phrase | 1.34 s |
+| One reused session | **0.55 s** |
+
+0.8 seconds per phrase, paid on every phrase, for nothing. A
+`requests.Session` with a mounted adapter is the entire fix and it beat
+every model swap, provider change and prompt tweak in this project
+combined.
 
 ### The slowness was never the model
 

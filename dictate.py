@@ -15,6 +15,7 @@ import ctypes
 import io
 import os
 import queue
+import re
 import sys
 import threading
 import time
@@ -38,6 +39,7 @@ LOG_FILE = BASE_DIR / "dictate.log"
 KEY_FILE = BASE_DIR / "api_key.txt"
 SETTINGS_FILE = BASE_DIR / "settings.txt"
 LAST_WAV = BASE_DIR / "last_phrase.wav"
+REPL_FILE = BASE_DIR / "replacements.txt"
 
 _settings = {}
 if SETTINGS_FILE.exists():
@@ -287,8 +289,22 @@ def _headers():
             "X-Title": "Ukrainian Voice Typing"}
 
 
+def _make_session():
+    """One reused connection instead of a fresh TLS handshake per phrase.
+    Measured on 6 real phrases: 1.34s -> 0.55s median. The single largest
+    speed win in this whole program."""
+    s = requests.Session()
+    adapter = requests.adapters.HTTPAdapter(pool_connections=4,
+                                            pool_maxsize=8, max_retries=0)
+    s.mount("https://", adapter)
+    return s
+
+
+_session = _make_session()
+
+
 def _post(url, payload):
-    resp = requests.post(url, headers=_headers(), json=payload, timeout=90)
+    resp = _session.post(url, headers=_headers(), json=payload, timeout=90)
     if resp.status_code >= 400:
         raise RuntimeError("HTTP %s: %s" % (resp.status_code, resp.text[:300]))
     return resp.json()
@@ -434,6 +450,38 @@ def paste(text):
         _pasting.clear()
 
 
+def _load_replacements():
+    """Словник власних назв: моделі нестабільні на брендах, а локальна
+    заміна коштує нуль мілісекунд і нуль центів."""
+    pairs = []
+    if not REPL_FILE.exists():
+        return pairs
+    try:
+        for raw in REPL_FILE.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            pat, rep = line.split("=", 1)
+            pat, rep = pat.strip(), rep.strip()
+            if not pat:
+                continue
+            rx = re.compile(r"(?<!\w)" + re.escape(pat) + r"(?!\w)",
+                            re.IGNORECASE | re.UNICODE)
+            pairs.append((rx, rep))
+    except Exception as exc:
+        log("WARNING replacements.txt: %s" % exc)
+    return pairs
+
+
+REPLACEMENTS = _load_replacements()
+
+
+def fix_terms(text):
+    for rx, rep in REPLACEMENTS:
+        text = rx.sub(rep, text)
+    return text
+
+
 def is_filler(text, dur, peak):
     """A lone stock phrase on a short/quiet segment is a hallucination,
     not speech. Real deliberate 'Дякую' is louder and rarely alone."""
@@ -478,6 +526,11 @@ def _do_transcribe(item):
         log("drop: filler hallucination %r (%.1fs peak=%.4f)"
             % (text, dur, peak))
         return None, None
+    if text:
+        fixed = fix_terms(text)
+        if fixed != text:
+            log("terms: %r -> %r" % (text, fixed))
+            text = fixed
     return text, data
 
 
