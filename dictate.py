@@ -470,6 +470,9 @@ def _load_replacements():
             pairs.append((rx, rep))
     except Exception as exc:
         log("WARNING replacements.txt: %s" % exc)
+    # Довші правила застосовуються першими: інакше "пайлон" спрацює
+    # раніше за "пайлон тех" і залишить хвіст "тех".
+    pairs.sort(key=lambda p: -len(p[0].pattern))
     return pairs
 
 
@@ -573,7 +576,7 @@ def paster_worker():
 
 def segmenter_worker():
     """Cuts the incoming stream into phrases at natural pauses."""
-    noise = deque(maxlen=int(3.0 / BLOCK_SEC))
+    floor = [None]
     preroll = deque(maxlen=max(1, int(PRE_ROLL_SEC / BLOCK_SEC)))
     phrase = []
     voiced = 0
@@ -607,13 +610,21 @@ def segmenter_worker():
         block = _audio_q.get()
         if block is None:
             flush()
-            noise.clear()
+            floor[0] = None
             preroll.clear()
             continue
         rms = float(np.sqrt(np.mean(block ** 2)))
-        noise.append(rms)
-        floor = float(np.percentile(noise, 20)) if len(noise) > 15 else rms
-        thr = max(ABS_FLOOR, floor * SNR_FACTOR)
+        # Рівень шуму має падати швидко і зростати майже ніколи. Інакше
+        # довга гучна мова сама задирає поріг, і короткі слова після неї
+        # відкидаються як тиша - у логах це були втрачені сегменти
+        # з піком 0.12 і навіть 0.30.
+        if floor[0] is None:
+            floor[0] = rms
+        elif rms < floor[0]:
+            floor[0] = 0.85 * floor[0] + 0.15 * rms
+        else:
+            floor[0] = 0.9995 * floor[0] + 0.0005 * rms
+        thr = max(ABS_FLOOR, floor[0] * SNR_FACTOR)
         if not speaking:
             preroll.append(block)
             if rms > thr:
