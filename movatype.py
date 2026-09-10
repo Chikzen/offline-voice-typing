@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-Gemini Dictate v2 - live voice input for Windows via Gemini (OpenRouter).
+MovaType - live voice typing for Windows (Ukrainian, Russian, English, German).
 
-Ctrl+Alt+Space toggles dictation ON/OFF. While ON the script listens
-continuously, cuts speech into phrases at natural pauses, transcribes each
-phrase and pastes it into the active field - so text appears while you keep
-talking. A small always-on-top badge shows the current state.
+Double-tap Ctrl (or Num Lock / Scroll Lock / Pause) toggles dictation ON/OFF.
+While ON the script listens continuously, cuts speech into phrases at natural
+pauses, transcribes each one and pastes it into whatever field has focus - so
+text appears while you keep talking. A small always-on-top badge shows state.
+
+https://github.com/Evronot/movatype
 """
 
 import base64
@@ -32,7 +34,7 @@ import pyperclip
 import tkinter as tk
 
 BASE_DIR = Path(__file__).resolve().parent
-LOG_FILE = BASE_DIR / "gemini_dictate.log"
+LOG_FILE = BASE_DIR / "movatype.log"
 KEY_FILE = BASE_DIR / "api_key.txt"
 SETTINGS_FILE = BASE_DIR / "settings.txt"
 LAST_WAV = BASE_DIR / "last_phrase.wav"
@@ -282,7 +284,7 @@ def _headers():
         raise RuntimeError("no OpenRouter API key")
     return {"Authorization": "Bearer " + api_key,
             "Content-Type": "application/json",
-            "X-Title": "Gemini Dictate"}
+            "X-Title": "MovaType"}
 
 
 def _post(url, payload):
@@ -742,7 +744,7 @@ def main():
     except Exception:
         pass
     log("=" * 50)
-    log("Gemini Dictate v2 starting, engine=%s model=%s lang=%s"
+    log("MovaType starting, engine=%s model=%s lang=%s"
         % (ENGINE, STT_MODEL if ENGINE != "chat" else CHAT_MODEL,
            LANGUAGE or "auto"))
     if not get_api_key():
@@ -788,7 +790,7 @@ def main():
 
     _ui = Badge()
     log("ready")
-    ui("off", "Gemini Dictate: %s" % registered[0])
+    ui("off", "MovaType: %s" % registered[0])
     threading.Timer(3.0, lambda: _ui and _ui.hide()).start()
     _ui.run()
 

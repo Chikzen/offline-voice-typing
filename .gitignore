@@ -9,7 +9,7 @@ __pycache__/
 *.pyc
 
 # Рабочие файлы и записи голоса
-gemini_dictate.log
+movatype.log
 last_phrase.wav
 phrases/
 _*.py
