@@ -99,6 +99,11 @@ BLOCK = 512
 BLOCK_SEC = BLOCK / float(SAMPLE_RATE)
 
 SILENCE_TAIL = float(cfg("SILENCE_TAIL", "0.45"))
+# Пауза на подумати - не кінець речення. Фраза йде на розпізнавання
+# одразу після SILENCE_TAIL, але крапку ставимо лише якщо мовчання
+# протривало довше за JOIN_WINDOW. Розпізнавання встигає за цей час,
+# тому затримка не зростає.
+JOIN_WINDOW = float(cfg("JOIN_WINDOW", "1.1"))
 # How many phrases may be transcribed at the same time. Output order is
 # always preserved - this only overlaps the network waits.
 MAX_PARALLEL = int(cfg("MAX_PARALLEL", "3"))
@@ -142,6 +147,9 @@ _tx_q = queue.Queue()
 _out_q = queue.Queue()
 _last_lang = ["?"]
 _forced_lang = [LANGUAGE]
+_cont = {}          # seq -> True, якщо мова поновилася швидко
+_cont_lock = threading.Lock()
+_seq = [0]
 _ui = None
 
 
@@ -515,8 +523,31 @@ def audio_callback(indata, frames, time_info, status):
         _audio_q.put(indata[:, 0].copy())
 
 
+def join_previous(text):
+    """Прибираємо крапку в кінці і робимо наступне слово малою літерою -
+    бо це продовження думки, а не нове речення. Крапка з комою, знаки
+    питання й оклику лишаються: вони змістовні."""
+    text = text.rstrip()
+    if text.endswith((".", "…")) and not text.endswith(("...", "!.", "?.")):
+        text = text[:-1].rstrip()
+    return text
+
+
+def lower_first(text):
+    """'Ми можемо' -> 'ми можемо', але 'Victron' і 'MPPT' не чіпаємо."""
+    m = re.match(r"^(\w+)", text, re.UNICODE)
+    if not m:
+        return text
+    word = m.group(1)
+    if not word[0].isupper() or not word[1:].islower():
+        return text
+    if not re.match(r"^[А-Яа-яІіЇїЄєҐґЁё]", word):
+        return text
+    return word[0].lower() + text[1:]
+
+
 def _do_transcribe(item):
-    audio, dur, peak, voiced_sec = item
+    audio, dur, peak, voiced_sec, seq, cut_at = item
     gain = min(TARGET_PEAK / peak, MAX_GAIN) if peak > 0 else 1.0
     loud = np.clip(audio * gain, -1.0, 1.0)
     data = wav_bytes(loud)
@@ -528,13 +559,13 @@ def _do_transcribe(item):
     if text and is_filler(text, dur, peak):
         log("drop: filler hallucination %r (%.1fs peak=%.4f)"
             % (text, dur, peak))
-        return None, None
+        return None, None, seq, cut_at
     if text:
         fixed = fix_terms(text)
         if fixed != text:
             log("terms: %r -> %r" % (text, fixed))
             text = fixed
-    return text, data
+    return text, data, seq, cut_at
 
 
 def dispatcher_worker():
@@ -553,17 +584,31 @@ def dispatcher_worker():
 def paster_worker():
     """Pastes results strictly in the order the phrases were spoken."""
     first = True
+    joining = [False]   # попередню фразу лишили без крапки
     while True:
         fut = _out_q.get()
         if fut is None:
             first = True
+            joining[0] = False
             continue
         try:
-            text, data = fut.result()
+            text, data, seq, cut_at = fut.result()
+            # Чекаємо, поки стане ясно: пауза на подумати чи кінець речення.
+            # Розпізнавання вже відбулося, тож зазвичай чекати нема чого.
+            wait = cut_at + JOIN_WINDOW - time.time()
+            if wait > 0:
+                time.sleep(min(wait, JOIN_WINDOW))
+            with _cont_lock:
+                continues = _cont.pop(seq, False)
             if text:
+                if joining[0]:
+                    text = lower_first(text)
+                if continues:
+                    text = join_previous(text)
                 archive(data, text)
                 paste(text if first else " " + text)
                 first = False
+                joining[0] = continues
         except Exception as exc:
             log("ERROR transcribe: %s" % exc)
             ui("error", "помилка API")
@@ -577,6 +622,7 @@ def paster_worker():
 def segmenter_worker():
     """Cuts the incoming stream into phrases at natural pauses."""
     floor = [None]
+    last = [None]   # (seq, коли фразу відрізали) - для склейки після паузи
     preroll = deque(maxlen=max(1, int(PRE_ROLL_SEC / BLOCK_SEC)))
     phrase = []
     voiced = 0
@@ -599,7 +645,10 @@ def segmenter_worker():
                 log("drop: only %.2fs voiced in %.2fs peak=%.4f"
                     % (voiced_sec, dur, peak))
             else:
-                _tx_q.put((audio, dur, peak, voiced_sec))
+                _seq[0] += 1
+                last[0] = (_seq[0], time.time())
+                _tx_q.put((audio, dur, peak, voiced_sec, _seq[0],
+                           time.time()))
         phrase = []
         speaking = False
         silence = 0.0
@@ -631,6 +680,12 @@ def segmenter_worker():
                 voiced += 1
                 if voiced >= 2:
                     speaking = True
+                    # Мова поновилася швидко після попередньої фрази -
+                    # значить то була пауза на подумати, а не крапка.
+                    if last[0] and time.time() - last[0][1] < JOIN_WINDOW:
+                        with _cont_lock:
+                            _cont[last[0][0]] = True
+                    last[0] = None
                     phrase = list(preroll)
                     preroll.clear()
                     silence = 0.0
