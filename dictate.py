@@ -104,6 +104,10 @@ SILENCE_TAIL = float(cfg("SILENCE_TAIL", "0.45"))
 # протривало довше за JOIN_WINDOW. Розпізнавання встигає за цей час,
 # тому затримка не зростає.
 JOIN_WINDOW = float(cfg("JOIN_WINDOW", "1.1"))
+# Автовимкнення після тиші: щоб увімкнений мікрофон не ловив чужу
+# розмову і не вставляв її у відкритий чат. 0 = вимкнути.
+IDLE_OFF = float(cfg("IDLE_OFF", "120"))
+IDLE_WARN = float(cfg("IDLE_WARN", "10"))
 # How many phrases may be transcribed at the same time. Output order is
 # always preserved - this only overlaps the network waits.
 MAX_PARALLEL = int(cfg("MAX_PARALLEL", "3"))
@@ -150,6 +154,7 @@ _forced_lang = [LANGUAGE]
 _cont = {}          # seq -> True, якщо мова поновилася швидко
 _cont_lock = threading.Lock()
 _seq = [0]
+_last_voice = [0.0]  # коли востаннє прийняли справжню фразу
 _ui = None
 
 
@@ -189,6 +194,7 @@ class Badge:
         "speech": ("#7a1f1f", "#ffd0d0"),
         "work": ("#7a5a1f", "#ffe9b0"),
         "error": ("#7a1f1f", "#ffd0d0"),
+        "fade": ("#2e3138", "#8b93a7"),
     }
 
     def __init__(self):
@@ -233,11 +239,13 @@ class Badge:
         h = self.win.winfo_height()
         self.win.geometry("+%d+%d" % (sw - w - 24, sh - h - 90))
 
-    def _apply(self, state, text, visible):
+    def _apply(self, state, text, visible, alpha=None):
         try:
             bg, fg = self.COLORS.get(state, self.COLORS["idle"])
             self.label.configure(text=text, bg=bg, fg=fg)
             self.win.configure(bg=bg)
+            self.win.attributes("-alpha", 0.92 if alpha is None
+                                else max(0.15, min(0.92, alpha)))
             if visible:
                 self.win.deiconify()
                 self.win.attributes("-topmost", True)
@@ -247,9 +255,9 @@ class Badge:
         except Exception:
             pass
 
-    def set(self, state, text, visible=True):
+    def set(self, state, text, visible=True, alpha=None):
         try:
-            self.root.after(0, self._apply, state, text, visible)
+            self.root.after(0, self._apply, state, text, visible, alpha)
         except Exception:
             pass
 
@@ -260,9 +268,9 @@ class Badge:
         self.root.mainloop()
 
 
-def ui(state, text, visible=True):
+def ui(state, text, visible=True, alpha=None):
     if _ui is not None:
-        _ui.set(state, text, visible)
+        _ui.set(state, text, visible, alpha)
 
 
 def get_api_key():
@@ -646,6 +654,7 @@ def segmenter_worker():
                     % (voiced_sec, dur, peak))
             else:
                 _seq[0] += 1
+                _last_voice[0] = time.time()
                 last[0] = (_seq[0], time.time())
                 _tx_q.put((audio, dur, peak, voiced_sec, _seq[0],
                            time.time()))
@@ -706,6 +715,32 @@ def segmenter_worker():
                     ui("work", "... розпізнаю")
 
 
+def idle_watchdog():
+    """Вимикає диктування після тиші. Увімкнений мікрофон - це ризик:
+    чужа розмова поруч може потрапити у відкритий чат."""
+    warned = [False]
+    while True:
+        time.sleep(0.5)
+        if not _active or IDLE_OFF <= 0:
+            warned[0] = False
+            continue
+        idle = time.time() - _last_voice[0]
+        left = IDLE_OFF - idle
+        if left <= 0:
+            log("auto-off: %.0f s of silence" % IDLE_OFF)
+            warned[0] = False
+            stop_dictation()
+        elif left <= IDLE_WARN:
+            warned[0] = True
+            # Плавно гасне: від 0.92 до 0.2 за останні секунди.
+            k = max(0.0, min(1.0, left / IDLE_WARN))
+            ui("fade", "вимикаюсь через %d с - скажіть щось" % int(left + 0.9),
+               True, 0.2 + 0.72 * k)
+        elif warned[0]:
+            warned[0] = False
+            ui("idle", "* диктування")
+
+
 def start_dictation():
     global _active, _stream
     with _state_lock:
@@ -722,6 +757,7 @@ def start_dictation():
             _stream = None
             return
         _active = True
+    _last_voice[0] = time.time()
     log("dictation ON")
     beep("on")
     ui("idle", "* диктування увімкнено")
@@ -878,6 +914,7 @@ def main():
     threading.Thread(target=segmenter_worker, daemon=True).start()
     threading.Thread(target=dispatcher_worker, daemon=True).start()
     threading.Thread(target=paster_worker, daemon=True).start()
+    threading.Thread(target=idle_watchdog, daemon=True).start()
 
     suppressed = {k.strip().lower() for k in SUPPRESS.split(",") if k.strip()}
     registered = []
