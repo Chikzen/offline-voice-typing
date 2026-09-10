@@ -76,6 +76,20 @@ arrow keys keep working.
 Audio feedback: two rising beeps = on, two falling = off, one long low =
 error. A small badge in the corner shows the current state.
 
+**A pause to think is not a full stop.** Cut a phrase at a 0.45 s pause and
+the model ends it with a period — so hesitating mid-sentence used to chop your
+thought in two. The phrase is now sent for recognition immediately, but the
+punctuation decision waits until `JOIN_WINDOW` (1.1 s). Speak again inside that
+window and the period is dropped and the next word lowercased; stay silent and
+the sentence really did end. Recognition runs during the wait, so this costs no
+extra latency.
+
+**It switches itself off.** After `IDLE_OFF` seconds of silence (2 minutes by
+default) dictation stops on its own, with the badge fading out and counting
+down for the last 10 seconds. A microphone left on is a liability: step away
+mid-task, start talking to someone, and the room ends up pasted into whatever
+chat you had open.
+
 ## Install
 
 Requires Python 3.10+.
@@ -113,6 +127,8 @@ Everything lives in `settings.txt`. Restart after editing.
 | `LANGUAGE` | Empty = detect language per phrase |
 | `ALLOWED_LANGS` | If a language outside this list is detected, the phrase is redone |
 | `SILENCE_TAIL` | Pause length that ends a phrase |
+| `JOIN_WINDOW` | Below this, a pause is a hesitation, not a full stop |
+| `IDLE_OFF`, `IDLE_WARN` | Switch off after silence, and the warning before it |
 | `MIN_PEAK`, `MIN_VOICED` | Noise gate — see "hallucinations" below |
 | `PROVIDER_ORDER`, `HEDGE_AFTER` | Latency control |
 | `MAX_PARALLEL` | Concurrent recognition requests |
@@ -260,16 +276,106 @@ MIT — see [LICENSE](LICENSE).
 
 ## Українською
 
-Глобальний голосовий ввід для Windows з підтримкою **української** мови,
-а також російської, англійської та німецької. Текст вставляється в будь-яке
-активне поле.
+### Голосовий ввід українською для Windows
 
-Зроблено тому, що вбудований голосовий ввід Windows (`Win+H`) української
-не підтримує — російська, польська, болгарська є, української немає.
+Натискаєш двічі **Ctrl**, говориш — і текст з'являється там, де стоїть
+курсор. У браузері, у Word, в Excel, у Telegram, у CRM. Нічого відкривати
+й ні на що перемикатися не треба.
 
-Вмикається подвійним натисканням **Ctrl** або клавішею **Num Lock**.
-Мова визначається автоматично для кожної фрази; **Ctrl+Alt+L** перемикає
-примусову мову, якщо потрібно надиктувати німецькою.
+Зроблено тому, що вбудований голосовий ввід Windows (`Win+H`) **не має
+української мови**. Російська є, польська є, болгарська є. Української
+немає, і запит до Microsoft лишається без відповіді.
 
-Потрібен ключ [OpenRouter](https://openrouter.ai/keys). Година безперервної
-диктовки коштує близько 4 центів. Усі налаштування — у `settings.txt`.
+### Як користуватися
+
+| Дія | Клавіша |
+|---|---|
+| Увімкнути / вимкнути диктування | **подвійний Ctrl** |
+| Те саме | **Num Lock**, **Scroll Lock**, **Pause** |
+| Змінити мову: авто → uk → ru → de → en | **Ctrl+Alt+L** |
+
+Подвійний Ctrl рахується лише тоді, коли Ctrl натиснули й відпустили
+**окремо**, тому `Ctrl+C` і `Ctrl+V` диктування не вмикають. Num Lock і
+Scroll Lock одразу повертаються у попередній стан, тож цифровий блок
+і стрілки в Excel працюють як завжди.
+
+Звукові сигнали: два висхідні — увімкнено, два низхідні — вимкнено,
+один довгий низький — помилка. Стан показує невелика плашка в кутку.
+
+### Що воно вміє, крім самого розпізнавання
+
+**Пауза на подумати — це не крапка.** Якщо різати фразу на паузі 0.45 с,
+модель ставить у кінці крапку, і одна думка розривається на два речення.
+Тепер фраза йде на розпізнавання одразу, але рішення про крапку чекає
+до 1.1 секунди. Заговорив далі — крапка зникає, наступне слово стає
+з малої літери. Промовчав довше — речення справді закінчилося. Затримка
+при цьому не зростає, бо розпізнавання встигає за час очікування.
+
+**Вимикається саме.** Після 2 хвилин тиші диктування зупиняється, а за
+10 секунд до того плашка починає гаснути й показує зворотний відлік.
+Увімкнений мікрофон — це ризик: відійшов, з кимось заговорив, і чужа
+розмова опинилася у відкритому чаті.
+
+**Словник термінів.** Моделі нестабільні на власних назвах: сьогодні
+пишуть «Victron», завтра «Віктрон». Файл `replacements.txt` виправляє
+це локально, миттєво, без жодного запиту. Один рядок на термін.
+
+**Мова визначається для кожної фрази окремо.** Можна почати українською,
+вставити англійську назву, відповісти колезі німецькою — і все запишеться
+правильно. Список `ALLOWED_LANGS` ловить помилки визначення: якщо модель
+вирішила, що це білоруська чи польська, фраза перепитується.
+
+### Встановлення
+
+Потрібен Python 3.10 або новіший.
+
+```
+git clone https://github.com/alex80674097219/ukrainian-voice-typing
+cd ukrainian-voice-typing
+python -m venv venv
+venv\Scripts\python.exe -m pip install -r requirements.txt
+copy api_key.example.txt api_key.txt
+```
+
+Ключ береться на [openrouter.ai/keys](https://openrouter.ai/keys) і
+вставляється в `api_key.txt` — цей файл у `.gitignore` і в репозиторій
+не потрапляє.
+
+Запуск: `venv\Scripts\pythonw.exe dictate.py`. Щоб стартувало разом
+із Windows, поклади ярлик на цю команду в теку `shell:startup`.
+
+### Чесно про важливе
+
+**Гроші.** Програма безкоштовна й відкрита, але розпізнавання працює
+через хмарний сервіс і потребує власного ключа. Виходить близько
+**4 центів за годину** безперервної диктовки. Жодних підписок — платиш
+лише за те, що наговорив.
+
+**Приватність.** Аудіо кожної фрази вирушає до OpenRouter і повертається
+текстом. Більше нікуди нічого не йде: ні телеметрії, ні акаунтів. Останні
+40 фраз зберігаються локально в теці `phrases/`, щоб можна було порівнювати
+моделі на власному голосі — цю теку можна просто видалити.
+
+**Антивірус.** Програма ставить глобальний перехоплювач клавіатури, читає
+буфер обміну й пише з мікрофона. Технічно це точнісінько сигнатура
+клавіатурного шпигуна, і Windows Defender може її позначити. Тут близько
+300 рядків в одному файлі — прочитай перед тим, як довіряти. Це чесна
+відповідь для будь-якої програми, здатної на такі речі.
+
+**Чого воно не вміє.** Це не потокове розпізнавання: текст з'являється
+фразами після паузи, а не окремими словами під час мовлення. Гарячу
+клавішу не побачить, поки активне вікно запущене від адміністратора —
+обмеження Windows. Латинські назви брендів усередині слов'янської мови
+жодна з перевірених моделей не пише стабільно, тому й існує `replacements.txt`.
+
+**Пороги гучності підібрані під конкретний мікрофон** — той, на якому це
+писалося. Якщо нічого не розпізнається або, навпаки, ловиться шум,
+дивись у `dictate.log`: там для кожної фрази записані реальні `peak`
+і `rms`. Підбирається одним рядком `MIN_PEAK` у `settings.txt`.
+
+### Не українською?
+
+Обмеження тут немає. Модель розуміє близько **99 мов**, Windows —
+приблизно 36. Якщо твоєї мови немає у Windows — грецької, івриту,
+грузинської, вірменської, казахської, азербайджанської — зміни один
+рядок у `settings.txt`, і все працюватиме так само.
