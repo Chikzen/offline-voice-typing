@@ -54,11 +54,21 @@ def cfg(name, default):
     return _settings.get(name, os.environ.get("GD_" + name, default))
 
 
-# ENGINE: "stt" = dedicated speech-to-text model (cannot invent text),
-#         "chat" = Gemini via chat completions (kept as a fallback).
-ENGINE = cfg("ENGINE", "stt").lower()
+# ENGINE: "local" = Parakeet on this PC, no network (primary since 13.09.2026),
+#         "stt"   = dedicated cloud speech-to-text via OpenRouter (reserve),
+#         "chat"  = Gemini via chat completions (old fallback).
+ENGINE = cfg("ENGINE", "local").lower()
 STT_MODEL = cfg("STT_MODEL", "openai/whisper-large-v3-turbo")
 CHAT_MODEL = cfg("CHAT_MODEL", "google/gemini-2.5-flash")
+# Локальна модель. Заміряно 13.09.2026 на 40 архівних фразах, i9-12900F:
+#   8 потоків: медіана 0.16 с, p95 0.34 с, найгірша (11 с мови) 0.48 с,
+#   RAM +730 МБ. 14 потоків ПОВІЛЬНІШЕ (0.34 с) - E-ядра гальмують.
+LOCAL_MODEL = cfg("LOCAL_MODEL", "nemo-parakeet-tdt-0.6b-v3")
+LOCAL_QUANT = cfg("LOCAL_QUANT", "int8")
+LOCAL_THREADS = int(cfg("LOCAL_THREADS", "8"))
+# Якщо локальна модель впала або ще вантажиться - фраза йде у хмару.
+LOCAL_FALLBACK = cfg("LOCAL_FALLBACK", "1").strip().lower() not in ("0", "no", "")
+MODELS_DIR = BASE_DIR / "models"
 # Empty LANGUAGE = auto-detect per phrase. ALLOWED_LANGS is the guard: if
 # the model reports a language Alex does not dictate in, the phrase is
 # transcribed again as FALLBACK_LANG instead of producing e.g. Belarusian.
@@ -115,14 +125,20 @@ PASTE_DELAY = float(cfg("PASTE_DELAY", "0.05"))
 MIN_PHRASE = float(cfg("MIN_PHRASE", "0.7"))
 MAX_PHRASE = 25.0
 PRE_ROLL_SEC = 0.30
-# Real speech on this mic peaks at 0.10-0.18; noise that produced the
-# "Дякую" hallucinations peaked at 0.009-0.05. Gate well above the noise.
-MIN_PEAK = float(cfg("MIN_PEAK", "0.030"))
+# Поріг тиші раніше був абсолютним (0.030). Це працювало, поки мікрофон
+# давав пік 0.10-0.18. Коли рівень входу впав утричі (сесія 13.09: медіана
+# піку 0.036, підсилення вперлося в стелю x12 у 72% фраз), той самий поріг
+# почав з'їдати справжні слова: 24 відкидання з піками 0.013-0.028 при
+# шумі в кімнаті 0.0006 - тобто у 20-45 разів гучніше за шум.
+# Тепер поріг рахується від виміряного шуму: у тихій кімнаті пропускає
+# тиху мову, у гучній - навпаки суворіший за старі 0.030.
+MIN_PEAK = float(cfg("MIN_PEAK", "0.010"))       # жорстка нижня межа
+PEAK_SNR = float(cfg("PEAK_SNR", "8.0"))         # пік фрази / рівень шуму
 MIN_VOICED = float(cfg("MIN_VOICED", "0.45"))
 ABS_FLOOR = float(cfg("ABS_FLOOR", "0.004"))
 SNR_FACTOR = float(cfg("SNR_FACTOR", "3.5"))
 TARGET_PEAK = 0.5
-MAX_GAIN = float(cfg("MAX_GAIN", "12.0"))
+MAX_GAIN = float(cfg("MAX_GAIN", "25.0"))
 
 # Whisper-family models emit these on silence/noise instead of nothing.
 FILLERS = {
@@ -155,6 +171,9 @@ _cont = {}          # seq -> True, якщо мова поновилася шви
 _cont_lock = threading.Lock()
 _seq = [0]
 _last_voice = [0.0]  # коли востаннє прийняли справжню фразу
+_quiet_run = [0]     # скільки фраз поспіль прийшли з тихого мікрофона
+_peak_ref = [0.12]   # типовий пік справжньої мови на цьому мікрофоні
+_stats = {"ok": 0, "drop": 0, "took": [], "peak": []}  # зведення за сесію
 _ui = None
 
 
@@ -430,13 +449,103 @@ def transcribe_chat(data):
             or "").strip()
 
 
+# ---------------------------------------------------------------- local ---
+# Parakeet TDT 0.6B v3 через onnxruntime, лише CPU (відеокарта AMD, CUDA
+# немає). Модель вантажиться один раз у фоні при старті (~2 с); поки її
+# нема - фрази йдуть у хмару. Розпізнавання серіалізоване через lock: при
+# 0.16 с на фразу паралелити нема сенсу, а два прогони одночасно лише
+# б'ються за ті самі ядра.
+_local = {"model": None, "error": None, "lock": threading.Lock()}
+_last_engine = ["cloud"]
+
+
+def _load_local_model():
+    t0 = time.time()
+    try:
+        MODELS_DIR.mkdir(exist_ok=True)
+        os.environ.setdefault("HF_HOME", str(MODELS_DIR))
+        os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+        import onnxruntime as ort
+        import onnx_asr
+        so = ort.SessionOptions()
+        so.intra_op_num_threads = LOCAL_THREADS
+        so.inter_op_num_threads = 1
+        model = onnx_asr.load_model(LOCAL_MODEL, quantization=LOCAL_QUANT,
+                                    sess_options=so)
+        # Прогрів: перший виклик завжди довший, хай він буде не на живій фразі.
+        model.recognize(np.zeros(SAMPLE_RATE, dtype=np.float32),
+                        sample_rate=SAMPLE_RATE)
+        _local["model"] = model
+        log("local model ready: %s (%s, %d threads) in %.1f s"
+            % (LOCAL_MODEL, LOCAL_QUANT, LOCAL_THREADS, time.time() - t0))
+    except Exception as exc:
+        _local["error"] = exc
+        log("ERROR local model failed to load: %s" % exc)
+        log(traceback.format_exc().rstrip())
+        if LOCAL_FALLBACK:
+            log("all phrases will go to the cloud (%s)" % STT_MODEL)
+            ui("show", "локальна модель не завантажилась - працюю через хмару",
+               True)
+            threading.Timer(4.0, lambda: _ui and _ui.hide()).start()
+
+
+def _guess_lang(text):
+    """Parakeet не повідомляє мову. Для плашки і для lower_first достатньо
+    грубої оцінки за літерами."""
+    if re.search(r"[іїєґІЇЄҐ]", text):
+        return "uk"
+    if re.search(r"[ыэъёЫЭЪЁ]", text):
+        return "ru"
+    if re.search(r"[А-Яа-я]", text):
+        # Українське речення майже завжди має і/ї/є; кирилиця з "и" без них
+        # на 4+ словах - це російська.
+        if re.search(r"[иИ]", text) and len(text.split()) >= 4:
+            return "ru"
+        return "uk/ru"
+    low = text.lower()
+    if re.search(r"[äöüß]", low) or re.search(
+            r"\b(und|ich|nicht|ist|das|die|der|wir|mit|für)\b", low):
+        return "de"
+    if re.search(r"[A-Za-z]", text):
+        return "en"
+    return "?"
+
+
+def transcribe_local(data):
+    model = _local["model"]
+    if model is None:
+        raise RuntimeError(_local["error"] or "model still loading")
+    with wave.open(io.BytesIO(data)) as wf:
+        sr = wf.getframerate()
+        pcm = wf.readframes(wf.getnframes())
+    audio = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
+    with _local["lock"]:
+        text = (model.recognize(audio, sample_rate=sr) or "").strip()
+    _last_lang[0] = _guess_lang(text)
+    return text
+
+
 def transcribe(data):
     try:
         LAST_WAV.write_bytes(data)
     except Exception:
         pass
     if ENGINE == "chat":
+        _last_engine[0] = "chat"
         return transcribe_chat(data)
+    if ENGINE == "local":
+        # Примусова мова (Ctrl+Alt+L) локальній моделі недоступна -
+        # такі фрази свідомо йдуть у хмару. Це і є шлях для німецької.
+        if not _forced_lang[0]:
+            try:
+                text = transcribe_local(data)
+                _last_engine[0] = "local"
+                return text
+            except Exception as exc:
+                if not LOCAL_FALLBACK:
+                    raise
+                log("local engine failed (%s) - cloud fallback" % exc)
+    _last_engine[0] = "cloud"
     return transcribe_stt(data)
 
 
@@ -452,7 +561,20 @@ def paste(text):
                 keyboard.release(mod)
             except Exception:
                 pass
-        pyperclip.copy(text)
+        # Буфер обміну в Windows - спільний ресурс: поки інша програма
+        # (скріншот, Telegram, браузер) його тримає, OpenClipboard падає.
+        # 13.09 так втратилося 5 фраз поспіль. Тепер - до 8 спроб за ~0.4 с.
+        last_exc = None
+        for attempt in range(8):
+            try:
+                pyperclip.copy(text)
+                last_exc = None
+                break
+            except Exception as exc:
+                last_exc = exc
+                time.sleep(0.05)
+        if last_exc is not None:
+            raise last_exc
         time.sleep(PASTE_DELAY)
         keyboard.send("ctrl+v")
         time.sleep(PASTE_DELAY * 2)
@@ -505,9 +627,18 @@ def is_filler(text, dur, peak):
     """A lone stock phrase on a short/quiet segment is a hallucination,
     not speech. Real deliberate 'Дякую' is louder and rarely alone."""
     clean = text.strip().strip('"«»').lower()
+    # Whisper позначає немовні звуки як *breath*, *ahem*, [music], (кашель).
+    # Це не текст, а ремарка субтитрів - ніколи не вставляти.
+    if re.fullmatch(r"[\*\[\(][^\*\]\)]{1,40}[\*\]\)][\.\s]*", clean):
+        return True
+    if clean.rstrip(".!…") in ("продолжение следует", "продовження далі",
+                               "to be continued", "fortsetzung folgt"):
+        return True
     if clean not in FILLERS:
         return False
-    return dur < 2.0 or peak < 0.07
+    # Поріг гучності теж відносний: при тихому мікрофоні фіксовані 0.07
+    # вбивали справжні короткі слова ("Так", "Да").
+    return dur < 2.0 or peak < 0.55 * _peak_ref[0]
 
 
 def archive(data, text):
@@ -561,9 +692,26 @@ def _do_transcribe(item):
     data = wav_bytes(loud)
     t0 = time.time()
     text = transcribe(data)
-    log("phrase %.1fs peak=%.4f gain=x%.1f api=%.1fs lang=%s -> %s"
-        % (dur, peak, gain, time.time() - t0, _last_lang[0],
+    took = time.time() - t0
+    log("phrase %.1fs peak=%.4f gain=x%.1f %s=%.2fs lang=%s -> %s"
+        % (dur, peak, gain, _last_engine[0], took, _last_lang[0],
            text or "(empty)"))
+    _stats["ok"] += 1
+    _stats["took"].append(took)
+    _stats["peak"].append(peak)
+    _peak_ref[0] = 0.9 * _peak_ref[0] + 0.1 * peak
+    # Мікрофон став тихим - попередити вголос, а не мовчки гризти слова.
+    # Один раз за сесію: 13.09 з порогом 0.05 попередження сипалося щохвилини,
+    # хоча розпізнавання йшло нормально. Нормальний пік цього мікрофона на
+    # 100% рівня входу - 0.03-0.08; справжня біда починається нижче 0.03.
+    if peak < 0.03:
+        _quiet_run[0] += 1
+        if _quiet_run[0] == 3:
+            log("WARNING: mic level is low (peak %.4f) - check Windows "
+                "input volume for the microphone" % peak)
+            ui("show", "тихий мікрофон - перевірте рівень входу", True)
+    elif _quiet_run[0] < 3:
+        _quiet_run[0] = 0
     if text and is_filler(text, dur, peak):
         log("drop: filler hallucination %r (%.1fs peak=%.4f)"
             % (text, dur, peak))
@@ -614,12 +762,20 @@ def paster_worker():
                 if continues:
                     text = join_previous(text)
                 archive(data, text)
-                paste(text if first else " " + text)
+                try:
+                    paste(text if first else " " + text)
+                except Exception as exc:
+                    # Текст уже розпізнано - не губити його мовчки.
+                    log("ERROR paste failed (%s), text was: %s" % (exc, text))
+                    ui("error", "не вдалося вставити - буфер зайнятий")
+                    beep("error")
+                    time.sleep(0.5)
+                    continue
                 first = False
                 joining[0] = continues
         except Exception as exc:
             log("ERROR transcribe: %s" % exc)
-            ui("error", "помилка API")
+            ui("error", "помилка розпізнавання")
             beep("error")
             time.sleep(1.0)
         finally:
@@ -644,12 +800,19 @@ def segmenter_worker():
             audio = np.concatenate(phrase)
             dur = len(audio) / float(SAMPLE_RATE)
             peak = float(np.abs(audio).max()) if audio.size else 0.0
+            # Поріг відносний до шуму, а не фіксований: інакше падіння
+            # рівня мікрофона мовчки з'їдає слова (див. коментар до PEAK_SNR).
+            noise = floor[0] if floor[0] else 0.0
+            gate = max(MIN_PEAK, noise * PEAK_SNR)
             if dur < MIN_PHRASE:
+                _stats["drop"] += 1
                 log("drop: too short %.2fs peak=%.4f" % (dur, peak))
-            elif peak < MIN_PEAK:
-                log("drop: too quiet %.2fs peak=%.4f (noise, not speech)"
-                    % (dur, peak))
+            elif peak < gate:
+                _stats["drop"] += 1
+                log("drop: too quiet %.2fs peak=%.4f gate=%.4f noise=%.4f"
+                    % (dur, peak, gate, noise))
             elif voiced_sec < MIN_VOICED:
+                _stats["drop"] += 1
                 log("drop: only %.2fs voiced in %.2fs peak=%.4f"
                     % (voiced_sec, dur, peak))
             else:
@@ -758,9 +921,34 @@ def start_dictation():
             return
         _active = True
     _last_voice[0] = time.time()
+    _quiet_run[0] = 0
     log("dictation ON")
     beep("on")
     ui("idle", "* диктування увімкнено")
+
+
+def _log_session_summary():
+    """Один рядок на сесію: сьогоднішню проблему з тихим мікрофоном було
+    видно лише мені і лише після ручного розбору лога. Тепер - одразу."""
+    s = _stats
+    try:
+        if s["ok"] or s["drop"]:
+            took = sorted(s["took"]) or [0.0]
+            peak = sorted(s["peak"]) or [0.0]
+            drop_pct = 100.0 * s["drop"] / max(1, s["ok"] + s["drop"])
+            log("session: %d phrases, %d dropped (%.0f%%), %s median %.2fs "
+                "p95 %.2fs max %.2fs, voice peak median %.3f"
+                % (s["ok"], s["drop"], drop_pct, _last_engine[0],
+                   took[len(took) // 2], took[int(len(took) * 0.95)],
+                   took[-1], peak[len(peak) // 2]))
+            if peak[len(peak) // 2] < 0.03:
+                log("session: voice is quiet - check the Windows input level")
+    except Exception:
+        pass
+    s["ok"] = 0
+    s["drop"] = 0
+    s["took"] = []
+    s["peak"] = []
 
 
 def stop_dictation():
@@ -778,6 +966,7 @@ def stop_dictation():
     _audio_q.put(None)
     _tx_q.put(None)
     log("dictation OFF")
+    _log_session_summary()
     beep("off")
     ui("off", "диктування вимкнено")
     threading.Timer(1.6, lambda: _ui and _ui.hide()).start()
@@ -892,6 +1081,23 @@ def toggle():
         threading.Thread(target=start_dictation, daemon=True).start()
 
 
+_mutex = []
+
+
+def _single_instance():
+    """Два екземпляри = кожна фраза вставляється двічі. Іменований м'ютекс
+    Windows живе, поки живий процес, тож після краху нічого чистити не треба."""
+    try:
+        k32 = ctypes.windll.kernel32
+        handle = k32.CreateMutexW(None, False, "Local\\UkrainianVoiceTyping")
+        if k32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+            return False
+        _mutex.append(handle)
+    except Exception as exc:
+        log("WARNING single-instance check failed: %s" % exc)
+    return True
+
+
 def main():
     global _ui
     try:
@@ -899,13 +1105,23 @@ def main():
     except Exception:
         pass
     log("=" * 50)
+    if not _single_instance():
+        log("another instance is already running - exiting")
+        sys.exit(0)
+    model_name = {"local": LOCAL_MODEL, "chat": CHAT_MODEL}.get(ENGINE, STT_MODEL)
     log("Dictation starting, engine=%s model=%s lang=%s"
-        % (ENGINE, STT_MODEL if ENGINE != "chat" else CHAT_MODEL,
-           LANGUAGE or "auto"))
+        % (ENGINE, model_name, LANGUAGE or "auto"))
+    if ENGINE == "local":
+        log("cloud reserve: %s (used while the model loads, on failure, "
+            "and for a forced language via %s)" % (STT_MODEL, LANG_HOTKEY))
+        threading.Thread(target=_load_local_model, daemon=True).start()
     if not get_api_key():
-        log("ERROR: no API key in %s" % KEY_FILE)
-        beep("error")
-        sys.exit(1)
+        if ENGINE == "local":
+            log("WARNING: no API key in %s - no cloud reserve" % KEY_FILE)
+        else:
+            log("ERROR: no API key in %s" % KEY_FILE)
+            beep("error")
+            sys.exit(1)
     try:
         log("input device: %s" % sd.query_devices(kind="input")["name"])
     except Exception as exc:

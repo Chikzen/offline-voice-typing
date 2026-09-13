@@ -3,3 +3,6 @@ sounddevice>=0.5
 numpy>=1.24
 requests>=2.31
 pyperclip>=1.8
+# Local offline engine (Parakeet TDT 0.6B v3 via onnxruntime, CPU only).
+# The ~700 MB model is downloaded into models\ on first start.
+onnx-asr[cpu,hub]>=0.12

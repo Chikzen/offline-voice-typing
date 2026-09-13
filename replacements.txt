@@ -11,6 +11,15 @@
 # значення не має - програма сортує сама.
 віктрон енерджі = Victron Energy
 виктрон энерджи = Victron Energy
+# вимова "Викторон" - модель чує "Викторон"/"Виктор" (13.09.2026)
+викторон энерджи = Victron Energy
+викторон енерджі = Victron Energy
+виктор энерджи = Victron Energy
+віктор енерджі = Victron Energy
+victoron energy = Victron Energy
+victor energy = Victron Energy
+викторон = Victron
+вікторон = Victron
 віктрон = Victron
 виктрон = Victron
 вектрон = Victron
@@ -18,16 +27,82 @@
 пайлон тэч = Pylontech
 пайлон тек = Pylontech
 пайлонтех = Pylontech
+пайлонтеч = Pylontech
+пайлон теч = Pylontech
+пайлон течь = Pylontech
 пилонтеч = Pylontech
 пайлон = Pylontech
 пилон = Pylontech
+# почуто 13.09.2026
+пилан тич = Pylontech
+пілан тіч = Pylontech
+пилан теч = Pylontech
+пілан теч = Pylontech
+пиланд теч = Pylontech
+пайланд теч = Pylontech
+pilantetch = Pylontech
+pilan tech = Pylontech
+pylon tech = Pylontech
+pylontec = Pylontech
+pilontech = Pylontech
+pylontach = Pylontech
+pilontach = Pylontech
+пілонтек = Pylontech
+пилонтек = Pylontech
 фроніус = Fronius
 фрониус = Fronius
+фронеус = Fronius
+фронєус = Fronius
+фронус = Fronius
+афрониус = Fronius
+афроніус = Fronius
+froneus = Fronius
+# Kstar (китайський інвертор) - чується як "Кастар"
+кастар = Kstar
+кестар = Kstar
+кей стар = Kstar
+castar = Kstar
+k star = Kstar
+# Kostal (німецький інвертор)
+кастал = Kostal
+косталь = Kostal
+костал = Kostal
+costal = Kostal
+# власні назви
+аванте = Avante
+авантє = Avante
+# REFUsol
+рефузол = REFUsol
+рефу сол = REFUsol
+refusol = REFUsol
+refu sol = REFUsol
+# SolarEdge / Huawei / SMA вже нижче; Growatt, Sungrow:
+сангроу = Sungrow
+санґроу = Sungrow
+сан гроу = Sungrow
+sun grow = Sungrow
+гудві = GoodWe
+гудве = GoodWe
+good we = GoodWe
+солакс = SolaX
+соларкс = SolaX
+solax = SolaX
+солис = Solis
+соліс = Solis
 хуавей = Huawei
 хуавєй = Huawei
 соларедж = SolarEdge
 солар едж = SolarEdge
 дейе = Deye
+# "Deye" вимовляється "дей", і модель чує це як "лея"/"дея"/"ідея"
+дея = Deye
+дєя = Deye
+лея = Deye
+лєя = Deye
+дейя = Deye
+deia = Deye
+deya = Deye
+deie = Deye
 джінко = Jinko
 джинко = Jinko
 гроват = Growatt
