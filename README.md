@@ -151,6 +151,22 @@ After that the program works with the network cable unplugged.
 To start it with Windows, put a shortcut to
 `venv\Scripts\pythonw.exe dictate.py` in `shell:startup`.
 
+### Linux (X11)
+
+Tested on Debian 13, GNOME on **X11**, Python 3.13. Wayland is not supported.
+No root at runtime: keys are watched and pressed through the X server.
+
+```
+sudo apt install libportaudio2 python3-tk python3-venv xclip
+python3 -m venv venv
+venv/bin/pip install -r requirements.txt
+./start.sh
+```
+
+Double-tap `Ctrl` works as on Windows. Num Lock / Scroll Lock / Pause and
+`Ctrl+Alt+L` are Windows-only for now, and terminals (they paste with
+`Ctrl+Shift+V`) are not supported yet.
+
 ### Optional: cloud reserve
 
 Without an API key the program is fully offline and that is the intended
@@ -396,6 +412,13 @@ venv\Scripts\pythonw.exe dictate.py
 
 Щоб стартувало разом із Windows, поклади ярлик на
 `venv\Scripts\pythonw.exe dictate.py` в теку `shell:startup`.
+
+**Linux (X11).** Перевірено на Debian 13, GNOME на X11. Wayland не
+підтримується. Встановлення — `sudo apt install libportaudio2 python3-tk
+python3-venv xclip`, далі `python3 -m venv venv`,
+`venv/bin/pip install -r requirements.txt`, запуск — `./start.sh`.
+Працює подвійний `Ctrl`; Num Lock / Scroll Lock і `Ctrl+Alt+L` поки лише
+на Windows, у терміналах вставка не працює.
 
 **Хмарний резерв — за бажанням.** Без ключа програма повністю офлайн, і
 це основний режим. Якщо покласти ключ з [openrouter.ai/keys](https://openrouter.ai/keys)
