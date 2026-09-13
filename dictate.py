@@ -491,7 +491,8 @@ def transcribe_chat(data):
 # нема - фрази йдуть у хмару. Розпізнавання серіалізоване через lock: при
 # 0.16 с на фразу паралелити нема сенсу, а два прогони одночасно лише
 # б'ються за ті самі ядра.
-_local = {"model": None, "error": None, "lock": threading.Lock()}
+_local = {"model": None, "error": None, "lock": threading.Lock(),
+          "ready": threading.Event()}
 _last_engine = ["cloud"]
 
 
@@ -523,6 +524,8 @@ def _load_local_model():
             ui("show", "локальна модель не завантажилась - працюю через хмару",
                True)
             threading.Timer(4.0, lambda: _ui and _ui.hide()).start()
+    finally:
+        _local["ready"].set()
 
 
 def _guess_lang(text):
@@ -573,6 +576,10 @@ def transcribe(data):
         # Примусова мова (Ctrl+Alt+L) локальній моделі недоступна -
         # такі фрази свідомо йдуть у хмару. Це і є шлях для німецької.
         if not _forced_lang[0]:
+            # Без ключа хмари фраза, сказана під час завантаження моделі,
+            # просто губилася (13.09: модель ~10 с на i5-1245U). Чекаємо.
+            if _local["model"] is None and not get_api_key():
+                _local["ready"].wait(120)
             try:
                 text = transcribe_local(data)
                 _last_engine[0] = "local"
