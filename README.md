@@ -5,8 +5,8 @@ talk, and the text lands in whatever field has focus — browser, Word, Excel,
 Telegram, your CRM. No cloud, no subscription, no account, and no audio ever
 leaves the machine.
 
-25 languages, detected automatically per phrase. Runs on the CPU — no NVIDIA
-card needed. **0.16 s** from the end of a phrase to text on an i9 desktop;
+25 languages offline, detected automatically per phrase — and ~99 more
+through an optional cloud key. Runs on the CPU — no NVIDIA card needed. **0.16 s** from the end of a phrase to text on an i9 desktop;
 even 2 CPU threads are faster than any cloud API measured.
 
 Speech-to-text · dictation · voice input · offline · local · privacy ·
@@ -48,8 +48,26 @@ Swedish · **Ukrainian**
 You can switch language mid-sentence — dictate Ukrainian, drop in an English
 brand name, answer a colleague in German. Nothing to configure.
 
-Need a language outside that list? Set `ENGINE=stt` and the cloud reserve
-(Whisper via OpenRouter, ~99 languages) takes over — see below.
+### Beyond those 25: ~99 languages with an optional cloud key
+
+The local model is the default and the point of the project. But the cloud
+path from the original version is still inside, and with an API key it gives
+you Whisper's ~99 languages — Arabic, Hebrew, Turkish, Georgian, Armenian,
+Kazakh, Hindi, Bengali, Urdu, Indonesian, Vietnamese, Thai, Japanese,
+Korean, Chinese, Swahili and more. Two ways to use it:
+
+- **Everything offline, one language forced to the cloud** — keep
+  `ENGINE=local`, put your language into `LANG_CYCLE`, switch with
+  `Ctrl+Alt+L` when you need it. Only those phrases leave the PC.
+- **Everything through the cloud** — `ENGINE=stt`. This is the old
+  cloud-only mode: ~1 s per phrase, ~$0.04 per hour of speech, any of the
+  ~99 languages detected automatically.
+
+So the honest language count is: **25 offline, ~99 with a key.** Which
+languages Windows' own voice typing lacks and this covers, offline or not:
+Ukrainian, Greek, Hebrew, Arabic, Persian, Serbian, Bosnian, Macedonian,
+Belarusian, Georgian, Armenian, Azerbaijani, Kazakh, Indonesian, Malay,
+Bengali, Urdu, Catalan, Icelandic, Swahili.
 
 ## Measured: local vs cloud
 
@@ -299,9 +317,17 @@ MIT — see [LICENSE](LICENSE).
 працює **на твоєму комп'ютері**: без хмари, без підписки, без акаунта.
 Звук нікуди не відправляється.
 
-25 мов, визначаються автоматично для кожної фрази — українська, російська,
-англійська, німецька, польська, чеська та інші. Потрібен лише процесор,
-відеокарта NVIDIA не потрібна.
+25 мов офлайн, визначаються автоматично для кожної фрази — українська,
+російська, англійська, німецька, польська, чеська та інші. Потрібен лише
+процесор, відеокарта NVIDIA не потрібна.
+
+**Ще ~99 мов — з необов'язковим ключем API.** Хмарний шлях з першої версії
+нікуди не зник: з ключем OpenRouter доступні мови Whisper — арабська,
+іврит, турецька, грузинська, вірменська, казахська, гінді, японська,
+корейська, китайська та інші. Або одна мова через `Ctrl+Alt+L` при
+повністю офлайновому режимі, або все через хмару з `ENGINE=stt`
+(~1 с на фразу, ~4 центи за годину). Чесний підсумок: **25 мов офлайн,
+~99 з ключем.**
 
 ### Чому воно з'явилося
 
