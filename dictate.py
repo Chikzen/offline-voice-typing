@@ -20,7 +20,6 @@ import sys
 import threading
 import time
 import wave
-import winsound
 import traceback
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
@@ -30,9 +29,20 @@ from pathlib import Path
 import numpy as np
 import requests
 import sounddevice as sd
-import keyboard
 import pyperclip
 import tkinter as tk
+
+IS_WIN = sys.platform == "win32"
+if IS_WIN:
+    import winsound
+    import keyboard
+else:
+    # Linux/X11: бібліотека keyboard читає /dev/input і вимагає root.
+    # Натомість сам X-сервер: RECORD бачить клавіші, XTEST їх натискає.
+    import fcntl
+    from Xlib import X, XK, display as xdisplay
+    from Xlib.ext import record, xtest
+    from Xlib.protocol import rq
 
 BASE_DIR = Path(__file__).resolve().parent
 LOG_FILE = BASE_DIR / "dictate.log"
@@ -122,6 +132,9 @@ IDLE_WARN = float(cfg("IDLE_WARN", "10"))
 # always preserved - this only overlaps the network waits.
 MAX_PARALLEL = int(cfg("MAX_PARALLEL", "3"))
 PASTE_DELAY = float(cfg("PASTE_DELAY", "0.05"))
+# X11: програма забирає вміст буфера асинхронно вже після Ctrl+V. Якщо
+# повернути старий вміст надто рано, вставиться саме він.
+RESTORE_DELAY = float(cfg("RESTORE_DELAY", "0.1" if IS_WIN else "0.3"))
 MIN_PHRASE = float(cfg("MIN_PHRASE", "0.7"))
 MAX_PHRASE = 25.0
 PRE_ROLL_SEC = 0.30
@@ -190,16 +203,33 @@ def log(msg):
         pass
 
 
+BEEPS = {"on": ((1000, 90), (1400, 90)),
+         "off": ((700, 90), (450, 90)),
+         "error": ((300, 400),)}
+
+
+def _tone(freq, ms, sr=44100):
+    t = np.arange(int(sr * ms / 1000.0)) / float(sr)
+    wave_ = 0.25 * np.sin(2 * np.pi * freq * t)
+    ramp = min(len(t) // 4, int(sr * 0.005))  # без клацань на краях
+    if ramp:
+        env = np.linspace(0.0, 1.0, ramp)
+        wave_[:ramp] *= env
+        wave_[-ramp:] *= env[::-1]
+    return wave_.astype(np.float32)
+
+
 def beep(kind):
     try:
-        if kind == "on":
-            winsound.Beep(1000, 90)
-            winsound.Beep(1400, 90)
-        elif kind == "off":
-            winsound.Beep(700, 90)
-            winsound.Beep(450, 90)
-        elif kind == "error":
-            winsound.Beep(300, 400)
+        tones = BEEPS.get(kind)
+        if not tones:
+            return
+        if IS_WIN:
+            for freq, ms in tones:
+                winsound.Beep(freq, ms)
+        else:
+            sd.play(np.concatenate([_tone(f, ms) for f, ms in tones]), 44100,
+                    blocking=True)
     except Exception:
         pass
 
@@ -224,7 +254,8 @@ class Badge:
         self.win.attributes("-topmost", True)
         self.win.attributes("-alpha", 0.92)
         self.label = tk.Label(
-            self.win, text="", font=("Segoe UI", 11, "bold"),
+            self.win, text="",
+            font=("Segoe UI" if IS_WIN else "DejaVu Sans", 11, "bold"),
             padx=14, pady=7, bg="#3a3a3a", fg="#bdbdbd",
         )
         self.label.pack()
@@ -234,6 +265,10 @@ class Badge:
 
     def _no_activate(self):
         """WS_EX_NOACTIVATE - the badge must never steal keyboard focus."""
+        if not IS_WIN:
+            # X11: вікно з overrideredirect не керується віконним менеджером
+            # і фокус саме не отримує.
+            return
         try:
             hwnd = self.win.winfo_id()
             parent = ctypes.windll.user32.GetParent(hwnd)
@@ -549,6 +584,38 @@ def transcribe(data):
     return transcribe_stt(data)
 
 
+_xdpy = []   # з'єднання з X для вставки - лише з потоку вставки
+
+
+def _release_modifiers():
+    # На Linux не робимо: фраза вставляється через секунди після тапу,
+    # коли Ctrl давно відпущено.
+    if IS_WIN:
+        for mod in ("ctrl", "alt", "shift", "windows"):
+            try:
+                keyboard.release(mod)
+            except Exception:
+                pass
+
+
+def _send_ctrl_v():
+    if IS_WIN:
+        keyboard.send("ctrl+v")
+        return
+    # XTEST з тими самими кодами клавіш, що й у фізичних Ctrl+V, - тож
+    # спрацьовує й на українській розкладці. XSendEvent (так робить
+    # pynput) частина програм ігнорує.
+    if not _xdpy:
+        _xdpy.append(xdisplay.Display())
+    dpy = _xdpy[0]
+    ctrl = dpy.keysym_to_keycode(XK.XK_Control_L)
+    v = dpy.keysym_to_keycode(XK.XK_v)
+    for event_type, code in ((X.KeyPress, ctrl), (X.KeyPress, v),
+                             (X.KeyRelease, v), (X.KeyRelease, ctrl)):
+        xtest.fake_input(dpy, event_type, code)
+    dpy.sync()
+
+
 def paste(text):
     _pasting.set()
     try:
@@ -556,11 +623,7 @@ def paste(text):
             old = pyperclip.paste()
         except Exception:
             old = None
-        for mod in ("ctrl", "alt", "shift", "windows"):
-            try:
-                keyboard.release(mod)
-            except Exception:
-                pass
+        _release_modifiers()
         # Буфер обміну в Windows - спільний ресурс: поки інша програма
         # (скріншот, Telegram, браузер) його тримає, OpenClipboard падає.
         # 13.09 так втратилося 5 фраз поспіль. Тепер - до 8 спроб за ~0.4 с.
@@ -576,8 +639,8 @@ def paste(text):
         if last_exc is not None:
             raise last_exc
         time.sleep(PASTE_DELAY)
-        keyboard.send("ctrl+v")
-        time.sleep(PASTE_DELAY * 2)
+        _send_ctrl_v()
+        time.sleep(RESTORE_DELAY)
         if old is not None:
             try:
                 pyperclip.copy(old)
@@ -1039,16 +1102,14 @@ def install_double_tap(key):
 
     def handler(event):
         try:
-            _handle(event)
+            _handle(event.event_type, (event.name or "").lower() in watched)
         except Exception as exc:
             log("WARNING double-tap handler: %s" % exc)
 
-    def _handle(event):
+    def _handle(event_type, hit):
         if _pasting.is_set():
             return
-        name = (event.name or "").lower()
-        hit = name in watched
-        if event.event_type == "down":
+        if event_type == "down":
             if hit:
                 if _tap["down"] == 0.0:
                     _tap["down"] = time.time()
@@ -1056,7 +1117,7 @@ def install_double_tap(key):
             else:
                 _tap["clean"] = False
                 _tap["last"] = 0.0
-        elif event.event_type == "up" and hit:
+        elif event_type == "up" and hit:
             held = time.time() - _tap["down"] if _tap["down"] else 99.0
             clean = _tap["clean"]
             _tap["down"] = 0.0
@@ -1071,7 +1132,46 @@ def install_double_tap(key):
             else:
                 _tap["last"] = now
 
-    keyboard.hook(handler)
+    if IS_WIN:
+        keyboard.hook(handler)
+        return
+
+    # X11 RECORD: бачимо натискання в усій сесії, нічого не перехоплюючи.
+    rec = xdisplay.Display()
+    if not rec.has_extension("RECORD"):
+        raise RuntimeError("X server has no RECORD extension")
+    x_names = {"ctrl": ("Control_L", "Control_R"),
+               "shift": ("Shift_L", "Shift_R"),
+               "alt": ("Alt_L", "Alt_R")}.get(key, (key,))
+    codes = set()
+    for name in x_names:
+        keysym = XK.string_to_keysym(name)
+        if keysym:
+            codes.update(c for c, _ in rec.keysym_to_keycodes(keysym))
+    if not codes:
+        raise RuntimeError("no keycode for %r" % key)
+    ctx = rec.record_create_context(0, [record.AllClients], [{
+        "core_requests": (0, 0), "core_replies": (0, 0),
+        "ext_requests": (0, 0, 0, 0), "ext_replies": (0, 0, 0, 0),
+        "delivered_events": (0, 0),
+        "device_events": (X.KeyPress, X.KeyRelease),
+        "errors": (0, 0), "client_started": False, "client_died": False}])
+
+    def on_record(reply):
+        if reply.category != record.FromServer or reply.client_swapped:
+            return
+        data = reply.data
+        while len(data):
+            event, data = rq.EventField(None).parse_binary_value(
+                data, rec.display, None, None)
+            try:
+                _handle("down" if event.type == X.KeyPress else "up",
+                        event.detail in codes)
+            except Exception as exc:
+                log("WARNING double-tap handler: %s" % exc)
+
+    threading.Thread(target=rec.record_enable_context, args=(ctx, on_record),
+                     name="x-record", daemon=True).start()
 
 
 def toggle():
@@ -1086,7 +1186,20 @@ _mutex = []
 
 def _single_instance():
     """Два екземпляри = кожна фраза вставляється двічі. Іменований м'ютекс
-    Windows живе, поки живий процес, тож після краху нічого чистити не треба."""
+    Windows живе, поки живий процес, тож після краху нічого чистити не треба.
+    На Linux те саме дає flock: ядро знімає блокування разом із процесом."""
+    if not IS_WIN:
+        run_dir = os.environ.get("XDG_RUNTIME_DIR") or str(BASE_DIR)
+        try:
+            fh = open(os.path.join(run_dir, "offline-voice-typing.lock"), "w")
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return False
+        except Exception as exc:
+            log("WARNING single-instance check failed: %s" % exc)
+            return True
+        _mutex.append(fh)
+        return True
     try:
         k32 = ctypes.windll.kernel32
         handle = k32.CreateMutexW(None, False, "Local\\UkrainianVoiceTyping")
@@ -1134,19 +1247,17 @@ def main():
 
     suppressed = {k.strip().lower() for k in SUPPRESS.split(",") if k.strip()}
     registered = []
-    for combo in [c.strip() for c in HOTKEY.split(",") if c.strip()]:
+    # На Linux гарячі клавіші Num Lock / Scroll Lock і перемикач мови не
+    # підтримуються (MVP): лише подвійний тап.
+    for combo in [c.strip() for c in HOTKEY.split(",") if c.strip()
+                  and IS_WIN]:
         try:
             keyboard.add_hotkey(combo, make_toggle(combo),
                                 suppress=combo.lower() in suppressed)
             registered.append(combo)
         except Exception as exc:
             log("WARNING hotkey %r not registered: %s" % (combo, exc))
-    if not registered:
-        log("ERROR: no hotkey could be registered")
-        beep("error")
-        sys.exit(1)
-    log("hotkeys: %s" % ", ".join(registered))
-    if LANG_HOTKEY:
+    if LANG_HOTKEY and IS_WIN:
         try:
             keyboard.add_hotkey(LANG_HOTKEY, cycle_language)
             log("language switch: %s (cycle: %s)"
@@ -1157,8 +1268,15 @@ def main():
         try:
             install_double_tap(DOUBLE_TAP)
             log("double tap: %s" % DOUBLE_TAP)
+            if not IS_WIN:
+                registered.append("%s x2" % DOUBLE_TAP)
         except Exception as exc:
             log("WARNING double tap %r failed: %s" % (DOUBLE_TAP, exc))
+    if not registered:
+        log("ERROR: no hotkey could be registered")
+        beep("error")
+        sys.exit(1)
+    log("hotkeys: %s" % ", ".join(registered))
 
     _ui = Badge()
     log("ready")
