@@ -891,13 +891,29 @@ def segmenter_worker():
         voiced = 0
         voiced_sec = 0.0
 
+    mute = [0]      # блоків рівно нулів поспіль від увімкнення; -1 = не стежимо
     while True:
         block = _audio_q.get()
         if block is None:
             flush()
             floor[0] = None
             preroll.clear()
+            mute[0] = 0
             continue
+        # Вимкнений (mute) мікрофон віддає рівно нулі: ні фраз, ні відкидань -
+        # людина говорить, і нічого не відбувається (13.09, Linux). Кажемо
+        # про це один раз за вмикання.
+        if mute[0] >= 0:
+            if block.any():
+                mute[0] = -1
+            else:
+                mute[0] += 1
+                if mute[0] * BLOCK_SEC >= 2.0:
+                    mute[0] = -1
+                    log("WARNING: microphone gives pure digital silence "
+                        "- is it muted?")
+                    ui("error", "мікрофон мовчить - чи не вимкнено звук?")
+                    beep("error")
         rms = float(np.sqrt(np.mean(block ** 2)))
         # Рівень шуму має падати швидко і зростати майже ніколи. Інакше
         # довга гучна мова сама задирає поріг, і короткі слова після неї
