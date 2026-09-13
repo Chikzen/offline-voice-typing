@@ -1212,14 +1212,6 @@ def _single_instance():
     return True
 
 
-def _quit_now(signum, frame):
-    """Ctrl+C у терміналі на Linux. Звичайний KeyboardInterrupt зупиняв
-    лише цикл Tk, а процес лишався живим (перевірено: понад 8 с), тож
-    виходимо одразу - блокування і мікрофон звільнить ядро."""
-    log("stopped by Ctrl+C")
-    os._exit(0)
-
-
 def main():
     global _ui
     try:
@@ -1231,7 +1223,11 @@ def main():
         log("another instance is already running - exiting")
         sys.exit(0)
     if not IS_WIN:
-        signal.signal(signal.SIGINT, _quit_now)
+        # Ctrl+C у терміналі. Python-обробник чекає, поки цикл Tk отримає
+        # подію вікна, а в простої це не настає (процес лишався живим).
+        # Дія ядра за замовчуванням завершує одразу; блокування й мікрофон
+        # звільняться разом із процесом.
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
     model_name = {"local": LOCAL_MODEL, "chat": CHAT_MODEL}.get(ENGINE, STT_MODEL)
     log("Dictation starting, engine=%s model=%s lang=%s"
         % (ENGINE, model_name, LANGUAGE or "auto"))
