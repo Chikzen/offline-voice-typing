@@ -40,6 +40,7 @@ else:
     # Linux/X11: бібліотека keyboard читає /dev/input і вимагає root.
     # Натомість сам X-сервер: RECORD бачить клавіші, XTEST їх натискає.
     import fcntl
+    import signal
     from Xlib import X, XK, display as xdisplay
     from Xlib.ext import record, xtest
     from Xlib.protocol import rq
@@ -1211,6 +1212,14 @@ def _single_instance():
     return True
 
 
+def _quit_now(signum, frame):
+    """Ctrl+C у терміналі на Linux. Звичайний KeyboardInterrupt зупиняв
+    лише цикл Tk, а процес лишався живим (перевірено: понад 8 с), тож
+    виходимо одразу - блокування і мікрофон звільнить ядро."""
+    log("stopped by Ctrl+C")
+    os._exit(0)
+
+
 def main():
     global _ui
     try:
@@ -1221,6 +1230,8 @@ def main():
     if not _single_instance():
         log("another instance is already running - exiting")
         sys.exit(0)
+    if not IS_WIN:
+        signal.signal(signal.SIGINT, _quit_now)
     model_name = {"local": LOCAL_MODEL, "chat": CHAT_MODEL}.get(ENGINE, STT_MODEL)
     log("Dictation starting, engine=%s model=%s lang=%s"
         % (ENGINE, model_name, LANGUAGE or "auto"))
