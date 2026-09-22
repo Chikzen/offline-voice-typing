@@ -42,7 +42,7 @@ else:
     import fcntl
     import signal
     from Xlib import X, XK, display as xdisplay
-    from Xlib.ext import record, xtest
+    from Xlib.ext import randr, record, xtest
     from Xlib.protocol import rq
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -235,6 +235,27 @@ def beep(kind):
         pass
 
 
+_xdpy_ui = []   # окреме з'єднання з X для потоку Tk
+
+
+def _primary_monitor():
+    """(x, y, ширина, висота) основного монітора саме зараз, або None.
+    Tk запам'ятовує розмір екрана на момент старту, і після зміни моніторів
+    плашка опинялася поза екраном (22.09: y=2516 при висоті екрана 1200)."""
+    try:
+        if not _xdpy_ui:
+            _xdpy_ui.append(xdisplay.Display())
+        root = _xdpy_ui[0].screen().root
+        mons = randr.get_monitors(root).monitors
+        mon = next((m for m in mons if m.primary), mons[0] if mons else None)
+        if mon is None:
+            return None
+        return mon.x, mon.y, mon.width_in_pixels, mon.height_in_pixels
+    except Exception as exc:
+        log("WARNING monitor geometry: %s" % exc)
+        return None
+
+
 class Badge:
     """Small always-on-top status window that never takes focus."""
 
@@ -288,11 +309,16 @@ class Badge:
 
     def _place(self):
         self.win.update_idletasks()
+        x0, y0 = 0, 0
         sw = self.win.winfo_screenwidth()
         sh = self.win.winfo_screenheight()
+        if not IS_WIN:
+            mon = _primary_monitor()
+            if mon:
+                x0, y0, sw, sh = mon
         w = self.win.winfo_width()
         h = self.win.winfo_height()
-        self.win.geometry("+%d+%d" % (sw - w - 24, sh - h - 90))
+        self.win.geometry("+%d+%d" % (x0 + sw - w - 24, y0 + sh - h - 90))
 
     def _apply(self, state, text, visible, alpha=None):
         try:
