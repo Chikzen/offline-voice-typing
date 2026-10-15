@@ -738,16 +738,23 @@ def is_filler(text, dur, peak):
     return dur < 2.0 or peak < 0.55 * _peak_ref[0]
 
 
+ARCHIVE_KEEP = 200
+
+
 def archive(data, text):
     """Keep the last phrases as WAV so models can be compared on real voice."""
     try:
         d = BASE_DIR / "phrases"
         d.mkdir(exist_ok=True)
-        stamp = datetime.now().strftime("%H%M%S")
+        # Повна дата в імені і відбір за часом файлу. З одним лише HHMMSS
+        # вечірні фрази 13.09 "пережили" всі наступні: за іменем 22:37 завжди
+        # пізніше за 19:00, тож свіжі записи стиралися одразу (15.10).
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         (d / ("%s.wav" % stamp)).write_bytes(data)
         with open(d / "index.txt", "a", encoding="utf-8") as fh:
             fh.write("%s.wav\t%s\n" % (stamp, text))
-        old = sorted(d.glob("*.wav"))[:-40]
+        old = sorted(d.glob("*.wav"),
+                     key=lambda p: p.stat().st_mtime)[:-ARCHIVE_KEEP]
         for f in old:
             f.unlink(missing_ok=True)
     except Exception:
